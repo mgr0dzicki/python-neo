@@ -18,7 +18,8 @@ except ImportError:
 
 from neo.io.nsdfio import HAVE_NSDF, NSDFIO
 from neo.test.iotest.common_io_test import BaseTestIO
-from neo.core import AnalogSignal, Segment, Block, ChannelIndex
+from neo.core import AnalogSignal, Segment, Block, ChannelIndex,\
+                     IrregularlySampledSignal, Event
 from neo.test.tools import assert_same_attributes, assert_same_annotations, assert_neo_object_is_compliant
 
 
@@ -66,7 +67,7 @@ class NSDFIOTest(unittest.TestCase):
         return block
 
     def _create_block_children(self, block):
-        for i in range(3):
+        for i in range(2):
             block.segments.append(self.create_segment(block, name='Segment #{}'.format(i)))
         for i in range(3):
             block.channel_indexes.append(self.create_channelindex(block, name='ChannelIndex #{}'.format(i),
@@ -88,10 +89,17 @@ class NSDFIOTest(unittest.TestCase):
         return segment
 
     def _create_segment_children(self, segment):
-        for i in range(2):
+        for i in range(1):
             segment.analogsignals.append(self.create_analogsignal(segment, name='Signal #{}'.format(i * 3)))
             segment.analogsignals.append(self.create_analogsignal2(segment, name='Signal #{}'.format(i * 3 + 1)))
             segment.analogsignals.append(self.create_analogsignal3(segment, name='Signal #{}'.format(i * 3 + 2)))
+
+        for i in range(2):
+            segment.irregularlysampledsignals.append(self.create_irregularlysampledsignal(segment,
+                                                                                          name='ISignal #{}'.format(i)))
+
+        for i in range(2):
+            segment.events.append(self.create_event(segment, name='Event #{}'.format(i)))
 
     def create_analogsignal(self, parent=None, name='AnalogSignal1'):
         signal = AnalogSignal([[1.0, 2.5], [2.2, 3.1], [3.2, 4.4]], units='mV',
@@ -120,6 +128,24 @@ class NSDFIOTest(unittest.TestCase):
         self._assign_basic_attributes(signal, name=name)
 
         return signal
+
+    def create_irregularlysampledsignal(self, parent=None, name='IrregularlySampledSignal'):
+        signal = IrregularlySampledSignal([1.0, 2.3, 6.4] * pq.ms,
+                                          [[1, 4], [2, 1], [0, -5]] * pq.mV)
+
+        signal.segment = parent
+        self._assign_basic_attributes(signal, name=name)
+
+        return signal
+
+    def create_event(self, parent=None, name='Event'):
+        event = Event([1.0, 2.3, 4.1] * pq.s,
+                      np.array(['trig1', 'trig2', 'trig3']));
+
+        event.segment = parent;
+        self._assign_basic_attributes(event, name=name)
+
+        return event
 
     def create_channelindex(self, parent=None, name='ChannelIndex', analogsignals=None):
         channels_num = min([signal.shape[1] for signal in analogsignals])
@@ -194,7 +220,7 @@ class NSDFIOTestWriteThenRead(NSDFIOTest):
         for lazy in self.lazy_modes:
             for cascade in self.cascade_modes:
                 segment2 = self.io.read_segment(lazy=lazy, cascade=cascade)
-                self.compare_segments(segment, segment2, lazy, cascade)
+                self.compare_segments(segment, segment2, lazy, cascade, single_segment=True)
 
     def compare_list_of_blocks(self, blocks1, blocks2, lazy=False, cascade=True):
         assert len(blocks1) == len(blocks2)
@@ -215,9 +241,17 @@ class NSDFIOTestWriteThenRead(NSDFIOTest):
         for segment1, segment2 in zip(block1.segments, block2.segments):
             self.compare_segments(segment1, segment2, lazy=lazy)
 
-    def compare_segments(self, segment1, segment2, lazy=False, cascade=True):
+        assert len(block1.channel_indexes) == len(block2.channel_indexes)
+        for channelindex1, channelindex2 in zip(block1.channel_indexes, block2.channel_indexes):
+            self.compare_channelindexes(channelindex1, channelindex2, lazy=lazy)
+
+    def compare_segments(self, segment1, segment2, lazy=False, cascade=True, single_segment=False):
         self._compare_objects(segment1, segment2)
         assert segment2.file_datetime == datetime.fromtimestamp(os.stat(self.filename).st_mtime)
+
+        if single_segment:
+            assert_neo_object_is_compliant(segment2)
+
         if cascade:
             self._compare_segments_children(segment1, segment2, lazy=lazy)
         else:
@@ -228,6 +262,14 @@ class NSDFIOTestWriteThenRead(NSDFIOTest):
         for signal1, signal2 in zip(segment1.analogsignals, segment2.analogsignals):
             self.compare_analogsignals(signal1, signal2, lazy=lazy)
 
+        assert len(segment1.irregularlysampledsignals) == len(segment2.irregularlysampledsignals)
+        for signal1, signal2 in zip(segment1.irregularlysampledsignals, segment2.irregularlysampledsignals):
+            self.compare_irregularlysampledsignals(signal1, signal2, lazy=lazy)
+
+        assert len(segment1.events) == len(segment2.events)
+        for event1, event2 in zip(segment1.events, segment2.events):
+            self.compare_events(event1, event2, lazy=lazy)
+
     def compare_analogsignals(self, signal1, signal2, lazy=False, cascade=True):
         if not lazy:
             self._compare_objects(signal1, signal2)
@@ -236,11 +278,35 @@ class NSDFIOTestWriteThenRead(NSDFIOTest):
             assert signal2.lazy_shape == signal1.shape
         assert signal2.dtype == signal1.dtype
 
+    def compare_irregularlysampledsignals(self, signal1, signal2, lazy=False, cascade=True):
+        if not lazy:
+            self._compare_objects(signal1, signal2)
+        else:
+            self._compare_objects(signal1, signal2, exclude_attr=['shape', 'signal', 'times'])
+            assert signal2.lazy_shape == signal1.shape
+        assert signal2.dtype == signal1.dtype
+        assert signal2.times.dtype == signal1.times.dtype
+
+    def compare_events(self, event1, event2, lazy=False, cascade=True):
+        if not lazy:
+            self._compare_objects(event1, event2)
+        else:
+            self._compare_objects(event1, event2, exclude_attr=['shape', 'times', 'labels'])
+            assert event2.lazy_shape == event1.shape
+        assert event1.dtype == event2.dtype
+
+    def compare_channelindexes(self, channelindex1, channelindex2, lazy=False, cascade=True):
+        self._compare_objects(channelindex1, channelindex2)
+
     def _compare_objects(self, object1, object2, exclude_attr=[]):
         assert object1.__class__.__name__ == object2.__class__.__name__
         assert object2.file_origin == self.filename
+
+        if hasattr(object1, 'file_datetime'):
+            assert object2.file_datetime == datetime.fromtimestamp(os.stat(self.filename).st_mtime)
+
         assert_same_attributes(object1, object2, exclude=['file_origin', 'file_datetime'] + exclude_attr)
-        assert_same_annotations(object1, object2)
+        assert_same_annotations(object1, object2, exclude=['nsdfio_path'])
 
 
 if __name__ == "__main__":
