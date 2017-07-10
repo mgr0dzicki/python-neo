@@ -307,9 +307,9 @@ class NSDFIO(BaseIO):
 
     def _write_basic_attributes(self, model, object):
         if object.name is not None:
-            model.attrs['name'] = object.name
+            model.attrs['name'] = self._encode_string(object.name)
         if object.description is not None:
-            model.attrs['description'] = object.description
+            model.attrs['description'] = self._encode_string(object.description)
 
     def _write_datetime_attributes(self, model, object):
         if object.rec_datetime is not None:
@@ -322,7 +322,7 @@ class NSDFIO(BaseIO):
     def _write_annotations(self, model, object):
         if object.annotations is not None:
             object.annotations.pop('nsdfio_path', None)
-            model.attrs['annotations'] = pickle.dumps(object.annotations, 0)
+            model.attrs['annotations'] = self._encode_string(pickle.dumps(object.annotations, 0))
 
     def _write_signal_data(self, model, channels, r_signal, signal, source_ds, writer):
         regular = isinstance(signal, AnalogSignal)
@@ -401,12 +401,20 @@ class NSDFIO(BaseIO):
         if isinstance(array, pq.Quantity):
             group.create_dataset(name, data=array.magnitude)
             group[name].attrs['dimensionality'] = str(array.dimensionality)
-        else:
+        elif isinstance(array, np.ndarray):
             if array.dtype.type == np.str_:
-                array = np.char.encode(array)
+                array = np.void(np.char.encode(array))
+            elif array.dtype.type == np.bytes_:
+                array = np.void(array)
             group.create_dataset(name, data=array)
-            if isinstance(array, list):
-                group[name].attrs['is_list'] = 'True'
+        else:
+            group.create_dataset(name, data=array)
+            group[name].attrs['is_list'] = 'True'
+
+    def _encode_string(self, string):
+        if isinstance(string, str):
+            string = string.encode()
+        return np.void(string)
 
     def read_all_blocks(self, lazy=False, cascade=True):
         """
@@ -631,9 +639,9 @@ class NSDFIO(BaseIO):
 
     def _read_basic_attributes(self, attrs, object):
         if attrs.get('name') is not None:
-            object.name = attrs['name']
+            object.name = self._decode_string(attrs['name'])
         if attrs.get('description') is not None:
-            object.description = attrs['description']
+            object.description = self._decode_string(attrs['description'])
         object.file_origin = self.filename
 
     def _read_datetime_attributes(self, attrs, object):
@@ -727,6 +735,26 @@ class NSDFIO(BaseIO):
 
         if group[name].attrs.get('dimensionality') is not None:
             return pq.Quantity(array, group[name].attrs['dimensionality'])
+
+        dtype = None
+        if array.dtype.type == np.void:
+            array = self._decode_string_array(array)
+            dtype = 'S'
+
         if group[name].attrs.get('is_list'):
-            return list(array)
-        return np.array(array)
+            return array
+
+        return np.array(array, dtype=dtype)
+
+    def _decode_string_array(self, array):
+        if len(np.shape(array)) == 0:
+            return self._decode_string(array)
+
+        result = []
+        for row in array:
+            result.append(self._decode_string_array(row))
+
+        return result
+
+    def _decode_string(self, string):
+        return str(string.tostring().decode())

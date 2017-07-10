@@ -140,7 +140,7 @@ class NSDFIOTest(unittest.TestCase):
 
     def create_event(self, parent=None, name='Event'):
         event = Event([1.0, 2.3, 4.1] * pq.s,
-                      np.array(['trig1', 'trig2', 'trig3']));
+                      np.array([chr(0) + 'trig1', chr(0) + 'trig2', chr(0) + 'trig3']));
 
         event.segment = parent;
         self._assign_basic_attributes(event, name=name)
@@ -165,10 +165,10 @@ class NSDFIOTest(unittest.TestCase):
 
     def _assign_basic_attributes(self, object, name=None):
         if name is None:
-            object.name = 'neo object'
+            object.name = chr(0) + 'neo object'
         else:
-            object.name = name
-        object.description = 'Example of neo object'
+            object.name = chr(0) + name
+        object.description = chr(0) + 'Example of neo object'
         object.file_origin = 'datafile.pp'
 
     def _assign_datetime_attributes(self, object):
@@ -179,7 +179,7 @@ class NSDFIOTest(unittest.TestCase):
         object.index = 12
 
     def _assign_annotations(self, object):
-        object.annotations = {'str': 'value',
+        object.annotations = {'str': chr(0) + 'value',
                               'int': 56,
                               'float': 5.234}
 
