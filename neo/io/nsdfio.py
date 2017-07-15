@@ -31,7 +31,7 @@ else:
 
 from neo.io.baseio import BaseIO
 from neo.core import Block, Segment, AnalogSignal, IrregularlySampledSignal, \
-                     Event, ChannelIndex
+    Event, ChannelIndex
 
 
 class NSDFIO(BaseIO):
@@ -212,8 +212,8 @@ class NSDFIO(BaseIO):
         self._write_basic_metadata(model, event)
         self._write_model_component(model, writer)
 
-        source_ds, source_name_dict, times_model = self._create_event_data_sources(model, uid, writer)
-        self._write_event_data(event, model, source_ds, source_name_dict, times_model, writer)
+        source_ds, source_name_dict = self._create_event_data_sources(model, uid, writer)
+        self._write_event_data(event, model, source_ds, source_name_dict, writer)
 
         event.annotations['nsdfio_uid'] = uid
 
@@ -367,31 +367,29 @@ class NSDFIO(BaseIO):
                                                 parent=channels_model))
 
         if regular:
-            source_ds = writer.add_uniform_ds(uid.encode(), [channel.uid.encode() for channel in channels])
+            source_ds = writer.add_uniform_ds(uid, [channel.uid.encode() for channel in channels])
         else:
-            source_ds = writer.add_nonuniform_ds(uid.encode(), [channel.uid.encode() for channel in channels])
+            source_ds = writer.add_nonuniform_ds(uid, [channel.uid.encode() for channel in channels])
         return channels_model, channels, source_ds
 
-    def _write_event_data(self, event, model, source_ds, source_name_dict, times_model, writer):
+    def _write_event_data(self, event, model, source_ds, source_name_dict, writer):
         dataobj = nsdf.EventData('times', unit=str(event.units.dimensionality))
-        dataobj.put_data(times_model.uid, event.times)
+        dataobj.put_data(model.uid, event.times)
         writer.add_event_1d(source_ds, dataobj, source_name_dict)
         self._write_array(model.hdfgroup, 'labels', event.labels)
 
     def _create_event_data_sources(self, model, uid, writer):
-        times_model = nsdf.ModelComponent('times', uid=uuid1().hex, parent=model)
-        self._write_model_component(times_model, writer)
-        source_ds = writer.add_event_ds_1d(uid, 'times', [times_model.uid])
+        source_ds = writer.add_event_ds_1d(uid, 'times', [uid])
         source_name_dict = {}
-        source_name_dict[times_model.uid] = 'data'
-        return source_ds, source_name_dict, times_model
+        source_name_dict[uid] = 'data'
+        return source_ds, source_name_dict
 
     def _write_channelindex_arrays(self, model, channelindex, writer):
         group = model.hdfgroup
 
         self._write_array(group, 'index', channelindex.index)
         if channelindex.channel_names is not None:
-            self._write_array(group, 'channel_names', np.array([name.encode('utf8') for name in channelindex.channel_names]))
+            self._write_array(group, 'channel_names', channelindex.channel_names)
         if channelindex.channel_ids is not None:
             self._write_array(group, 'channel_ids', channelindex.channel_ids)
         if channelindex.coordinates is not None:
@@ -692,7 +690,7 @@ class NSDFIO(BaseIO):
             labels = np.array([], dtype='S')
         else:
             dataobj = reader.get_event_data(uid, 'times')
-            times = dataobj.get_data(list(group.values())[1].attrs['uid'])
+            times = dataobj.get_data(uid)
             labels = self._read_array(group, 'labels')
         event = Event(times=times, units=data_group.attrs['unit'], labels=labels)
         if lazy:
