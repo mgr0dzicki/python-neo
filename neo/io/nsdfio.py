@@ -31,7 +31,7 @@ else:
 
 from neo.io.baseio import BaseIO
 from neo.core import Block, Segment, AnalogSignal, IrregularlySampledSignal, \
-    Event, ChannelIndex
+    Event, Epoch, ChannelIndex
 
 
 class NSDFIO(BaseIO):
@@ -153,6 +153,7 @@ class NSDFIO(BaseIO):
         self._write_children(segment.irregularlysampledsignals, 'irregularlysampledsignals',
                              'write_irregularlysampledsignal', model, writer)
         self._write_children(segment.events, 'events', 'write_event', model, writer)
+        self._write_children(segment.epochs, 'epochs', 'write_epoch', model, writer)
 
     def write_analogsignal(self, signal, name, writer, parent):
         """
@@ -198,24 +199,42 @@ class NSDFIO(BaseIO):
         """
         Write an Event to the file
 
-        :param signal: Event to be written
+        :param event: Event to be written
         :param name: Name for event representation in NSDF model tree
         :param writer: NSDFWriter instance
         :param parent: NSDF ModelComponent which will be the parent of event NSDF representation
         """
+        self._write_event_object(event, name, writer, parent)
+
+    def write_epoch(self, epoch, name, writer, parent):
+        """
+        Write an Epoch to the file
+
+        :param epoch: Epoch to be written
+        :param name: Name for epoch representation in NSDF model tree
+        :param writer: NSDFWriter instance
+        :param parent: NSDF ModelComponent which will be the parent of epoch NSDF representation
+        """
+        self._write_event_object(epoch, name, writer, parent)
+
+    def _write_event_object(self, object, name, writer, parent):
         uid = uuid1().hex
         model = nsdf.ModelComponent(name, uid=uid, parent=parent)
 
-        if self._write_only_reference(model, event, uid, writer):
+        if self._write_only_reference(model, object, uid, writer):
             return
 
-        self._write_basic_metadata(model, event)
+        self._write_basic_metadata(model, object)
         self._write_model_component(model, writer)
 
         source_ds, source_name_dict = self._create_event_data_sources(model, uid, writer)
-        self._write_event_data(event, model, source_ds, source_name_dict, writer)
+        self._write_event_data(object, model, source_ds, source_name_dict, writer)
 
-        event.annotations['nsdfio_uid'] = uid
+        if isinstance(object, Epoch):
+            source_ds, source_name_dict = self._create_epoch_data_sources(model, uid, writer)
+            self._write_epoch_data(object, model, source_ds, source_name_dict, writer)
+
+        object.annotations['nsdfio_uid'] = uid
 
     def write_channelindex(self, channelindex, name, writer, parent):
         """
@@ -384,6 +403,17 @@ class NSDFIO(BaseIO):
         source_name_dict[uid] = 'data'
         return source_ds, source_name_dict
 
+    def _write_epoch_data(self, epoch, model, source_ds, source_name_dict, writer):
+        dataobj = nsdf.EventData('durations', unit=str(epoch.durations.units.dimensionality))
+        dataobj.put_data(model.uid, epoch.durations)
+        writer.add_event_1d(source_ds, dataobj, source_name_dict)
+
+    def _create_epoch_data_sources(self, model, uid, writer):
+        source_ds = writer.add_event_ds_1d(uid, 'durations', [uid])
+        source_name_dict = {}
+        source_name_dict[uid] = 'data'
+        return source_ds, source_name_dict
+
     def _write_channelindex_arrays(self, model, channelindex, writer):
         group = model.hdfgroup
 
@@ -498,6 +528,8 @@ class NSDFIO(BaseIO):
                                                                                         reader=reader))
         for child in group['events/'].values():
             segment.events.append(self.read_event(lazy=lazy, group=child, reader=reader))
+        for child in group['epochs/'].values():
+            segment.epochs.append(self.read_epoch(lazy=lazy, group=child, reader=reader))
 
     def read_analogsignal(self, lazy=False, cascade=True, group=None, reader=None):
         """
@@ -572,6 +604,31 @@ class NSDFIO(BaseIO):
 
         self.objects_dict[uid] = event
         return event
+
+    def read_epoch(self, lazy=False, cascade=True, group=None, reader=None):
+        """
+        Read an Epoch from the file (must be child of a Segment)
+
+        :param lazy: Enables lazy reading
+        :param cascade: Read nested objects or not?
+        :param group: HDF5 Group representing the epoch in NSDF model tree
+        :param reader: NSDFReader instance
+        :return: Read Epoch
+        """
+        attrs = group.attrs
+
+        if attrs.get('reference_to') is not None:
+            return self.objects_dict[attrs['reference_to']]
+
+        uid = attrs['uid']
+        times_group = reader.data['event/{}/times/data'.format(uid)]
+        durations_group = reader.data['event/{}/durations/data'.format(uid)]
+        epoch = self._create_epoch(times_group, durations_group, group, lazy, reader, uid)
+
+        self._read_basic_metadata(attrs, epoch, path=group.name)
+
+        self.objects_dict[uid] = epoch
+        return epoch
 
     def read_channelindex(self, lazy=False, cascade=True, group=None, reader=None):
         """
@@ -692,10 +749,34 @@ class NSDFIO(BaseIO):
             dataobj = reader.get_event_data(uid, 'times')
             times = dataobj.get_data(uid)
             labels = self._read_array(group, 'labels')
+
         event = Event(times=times, units=data_group.attrs['unit'], labels=labels)
+
         if lazy:
             event.lazy_shape = (data_group.shape[0],)
+
         return event
+
+    def _create_epoch(self, times_group, durations_group, group, lazy, reader, uid):
+        if lazy:
+            times = []
+            durations = []
+            labels = np.array([], dtype='S')
+        else:
+            dataobj = reader.get_event_data(uid, 'times')
+            times = dataobj.get_data(uid)
+            dataobj = reader.get_event_data(uid, 'durations')
+            durations = dataobj.get_data(uid)
+            labels = self._read_array(group, 'labels')
+
+        epoch = Epoch(times=pq.Quantity(times, times_group.attrs['unit']),
+                      durations=pq.Quantity(durations, durations_group.attrs['unit']),
+                      labels=labels)
+
+        if lazy:
+            epoch.lazy_shape = (times_group.shape[0],)
+
+        return epoch
 
     def _read_analogsignal_t_start(self, attrs, data_group):
         t_start = float(data_group.attrs['tstart']) * pq.Quantity(1, data_group.attrs['tunit'])

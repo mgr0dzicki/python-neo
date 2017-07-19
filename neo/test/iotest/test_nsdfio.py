@@ -19,7 +19,7 @@ except ImportError:
 from neo.io.nsdfio import HAVE_NSDF, NSDFIO
 from neo.test.iotest.common_io_test import BaseTestIO
 from neo.core import AnalogSignal, Segment, Block, ChannelIndex,\
-                     IrregularlySampledSignal, Event
+                     IrregularlySampledSignal, Event, Epoch
 from neo.test.tools import assert_same_attributes, assert_same_annotations, assert_neo_object_is_compliant
 
 
@@ -101,6 +101,9 @@ class NSDFIOTest(unittest.TestCase):
         for i in range(2):
             segment.events.append(self.create_event(segment, name='Event #{}'.format(i)))
 
+        for i in range(2):
+            segment.epochs.append(self.create_epoch(segment, name='Epoch #{}'.format(i)))
+
     def create_analogsignal(self, parent=None, name='AnalogSignal1'):
         signal = AnalogSignal([[1.0, 2.5], [2.2, 3.1], [3.2, 4.4]], units='mV',
                               sampling_rate=100 * pq.Hz, t_start=2 * pq.min)
@@ -142,10 +145,19 @@ class NSDFIOTest(unittest.TestCase):
         event = Event([1.0, 2.3, 4.1] * pq.s,
                       np.array([chr(0) + 'trig1', chr(0) + 'trig2', chr(0) + 'trig3']));
 
-        event.segment = parent;
+        event.segment = parent
         self._assign_basic_attributes(event, name=name)
 
         return event
+
+    def create_epoch(self, parent=None, name='Epoch'):
+        epoch = Epoch(times=[1.0, 2.5, 10.0] * pq.s, durations=[1.0, 0.5, 1.0] * pq.ms,
+                      labels=np.array([chr(0) + 'btn1', chr(0) + 'btn2', chr(0) + 'btn3']))
+
+        epoch.segment = parent
+        self._assign_basic_attributes(epoch, name=name)
+
+        return epoch
 
     def create_channelindex(self, parent=None, name='ChannelIndex', analogsignals=None):
         channels_num = min([signal.shape[1] for signal in analogsignals])
@@ -270,6 +282,10 @@ class NSDFIOTestWriteThenRead(NSDFIOTest):
         for event1, event2 in zip(segment1.events, segment2.events):
             self.compare_events(event1, event2, lazy=lazy)
 
+        assert len(segment1.epochs) == len(segment2.epochs)
+        for epoch1, epoch2 in zip(segment1.epochs, segment2.epochs):
+            self.compare_epochs(epoch1, epoch2, lazy=lazy)
+
     def compare_analogsignals(self, signal1, signal2, lazy=False, cascade=True):
         if not lazy:
             self._compare_objects(signal1, signal2)
@@ -294,6 +310,14 @@ class NSDFIOTestWriteThenRead(NSDFIOTest):
             self._compare_objects(event1, event2, exclude_attr=['shape', 'times', 'labels'])
             assert event2.lazy_shape == event1.shape
         assert event1.dtype == event2.dtype
+
+    def compare_epochs(self, epoch1, epoch2, lazy=False, cascade=True):
+        if not lazy:
+            self._compare_objects(epoch1, epoch2)
+        else:
+            self._compare_objects(epoch1, epoch2, exclude_attr=['shape', 'times', 'durations', 'labels'])
+            assert epoch2.lazy_shape == epoch1.shape
+        assert epoch1.dtype == epoch2.dtype
 
     def compare_channelindexes(self, channelindex1, channelindex2, lazy=False, cascade=True):
         self._compare_objects(channelindex1, channelindex2)
